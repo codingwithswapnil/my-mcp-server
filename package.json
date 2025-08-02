@@ -1,0 +1,35 @@
+{
+  "name": "example-mcp-server",
+  "version": "0.1.0",
+  "description": "An example MCP (Model Context Protocol) server",
+  "main": "build/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "tsc --watch & nodemon build/index.js",
+    "mcp-inspector": "npx @modelcontextprotocol/inspector node build/index.js"
+  },
+  "bin": {
+    "example-mcp-server": "build/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "nodemon": "^3.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "tools"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
