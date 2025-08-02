@@ -9,6 +9,10 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 
+// Add missing import for fetch (Node.js 18+ has global fetch, but for older versions use node-fetch)
+// If using Node.js 18+, you can remove this import
+// import fetch from "node-fetch";
+
 class ExampleMCPServer {
   private server: Server;
 
@@ -18,10 +22,174 @@ class ExampleMCPServer {
         name: "example-mcp-server",
         version: "0.1.0",
       }
-    );
+    ); // <-- FIX: close constructor argument
 
     this.setupToolHandlers();
     this.setupErrorHandling();
+  }
+
+  private async handleHttpRequest(args: any) {
+    if (!args || typeof args.url !== 'string') {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "URL parameter is required"
+      );
+    }
+
+    try {
+      const method = args.method || 'GET';
+      const timeout = args.timeout || 10000;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+      const fetchOptions: RequestInit = {
+        method,
+        headers: {
+          'User-Agent': 'MCP-Server/1.0',
+          ...args.headers
+        },
+        signal: controller.signal
+      };
+
+      if (args.body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+        fetchOptions.body = args.body;
+        if (!args.headers?.['Content-Type']) {
+          fetchOptions.headers = {
+            ...fetchOptions.headers,
+            'Content-Type': 'application/json'
+          };
+        }
+      }
+
+      const response = await fetch(args.url, fetchOptions);
+      clearTimeout(timeoutId);
+
+      const contentType = response.headers.get('content-type') || '';
+      let responseData: any;
+
+      if (contentType.includes('application/json')) {
+        responseData = await response.json();
+      } else {
+        responseData = await response.text();
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `HTTP ${method} ${args.url}\nStatus: ${response.status} ${response.statusText}\nContent-Type: ${contentType}\n\nResponse:\n${JSON.stringify(responseData, null, 2)}`,
+          },
+        ],
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new McpError(
+        ErrorCode.InternalError,
+        `HTTP request failed: ${errorMessage}`
+      );
+    }
+  }
+
+  private async handleWeatherAPI(args: any) {
+    if (!args || typeof args.city !== 'string') {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "City parameter is required"
+      );
+    }
+
+    try {
+      const units = args.units || 'metric';
+      const apiKey = process.env.OPENWEATHER_API_KEY;
+
+      if (!apiKey) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Weather API requires OPENWEATHER_API_KEY environment variable. You can get a free API key from https://openweathermap.org/api\n\nExample usage:\nOPENWEATHER_API_KEY=your_key_here npm start",
+            },
+          ],
+        };
+      }
+
+      const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(args.city)}&appid=${apiKey}&units=${units}`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(`Weather API error: ${data.message || 'Unknown error'}`);
+      }
+
+      const unitSymbol = units === 'metric' ? '°C' : units === 'imperial' ? '°F' : 'K';
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Weather in ${data.name}, ${data.sys.country}:
+🌡️ Temperature: ${data.main.temp}${unitSymbol} (feels like ${data.main.feels_like}${unitSymbol})
+🌤️ Condition: ${data.weather[0].main} - ${data.weather[0].description}
+💧 Humidity: ${data.main.humidity}%
+🌬️ Wind: ${data.wind.speed} ${units === 'metric' ? 'm/s' : 'mph'}
+👁️ Visibility: ${data.visibility / 1000} km
+🌅 Sunrise: ${new Date(data.sys.sunrise * 1000).toLocaleTimeString()}
+🌇 Sunset: ${new Date(data.sys.sunset * 1000).toLocaleTimeString()}`,
+          },
+        ],
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Weather API request failed: ${errorMessage}`
+      );
+    }
+  }
+
+  private async handleJsonPlaceholder(args: any) {
+    if (!args || typeof args.endpoint !== 'string') {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        "Endpoint parameter is required"
+      );
+    }
+
+    try {
+      let url = `https://jsonplaceholder.typicode.com/${args.endpoint}`;
+
+      if (args.id && typeof args.id === 'number') {
+        url += `/${args.id}`;
+      }
+
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        throw new Error(`API request failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `JSONPlaceholder API - ${args.endpoint}${args.id ? ` (ID: ${args.id})` : ''}:\n\n${JSON.stringify(data, null, 2)}`,
+          },
+        ],
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new McpError(
+        ErrorCode.InternalError,
+        `JSONPlaceholder API request failed: ${errorMessage}`
+      );
+    }
   }
 
   private setupToolHandlers() {
@@ -46,24 +214,6 @@ class ExampleMCPServer {
           {
             name: "add_numbers",
             description: "Add two numbers together",
-            inputSchema: {
-              type: "object",
-              properties: {
-                a: {
-                  type: "number",
-                  description: "First number",
-                },
-                b: {
-                  type: "number",
-                  description: "Second number",
-                },
-              },
-              required: ["a", "b"],
-            },
-          },
-          {
-            name: "multiply_numbers",
-            description: "Multiply two numbers",
             inputSchema: {
               type: "object",
               properties: {
@@ -110,6 +260,81 @@ class ExampleMCPServer {
               required: ["operation", "path"],
             },
           },
+          {
+            name: "http_request",
+            description: "Make HTTP requests to APIs",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: {
+                  type: "string",
+                  description: "The URL to make the request to",
+                },
+                method: {
+                  type: "string",
+                  enum: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+                  description: "HTTP method",
+                  default: "GET"
+                },
+                headers: {
+                  type: "object",
+                  description: "HTTP headers as key-value pairs",
+                  additionalProperties: {
+                    type: "string"
+                  }
+                },
+                body: {
+                  type: "string",
+                  description: "Request body (for POST, PUT, PATCH)"
+                },
+                timeout: {
+                  type: "number",
+                  description: "Request timeout in milliseconds",
+                  default: 10000
+                }
+              },
+              required: ["url"],
+            },
+          },
+          {
+            name: "weather_api",
+            description: "Get weather data for a city using OpenWeatherMap API",
+            inputSchema: {
+              type: "object",
+              properties: {
+                city: {
+                  type: "string",
+                  description: "City name (e.g., 'London', 'New York')",
+                },
+                units: {
+                  type: "string",
+                  enum: ["metric", "imperial", "kelvin"],
+                  description: "Temperature units",
+                  default: "metric"
+                }
+              },
+              required: ["city"],
+            },
+          },
+          {
+            name: "json_placeholder",
+            description: "Get sample data from JSONPlaceholder API (posts, users, todos)",
+            inputSchema: {
+              type: "object",
+              properties: {
+                endpoint: {
+                  type: "string",
+                  enum: ["posts", "users", "todos", "comments", "albums", "photos"],
+                  description: "API endpoint to fetch data from",
+                },
+                id: {
+                  type: "number",
+                  description: "Optional ID to fetch specific item",
+                }
+              },
+              required: ["endpoint"],
+            },
+          },
         ],
       };
     });
@@ -154,20 +379,6 @@ class ExampleMCPServer {
               ],
             };
 
-          case "multiply_numbers":
-            if (typeof args.a !== 'number' || typeof args.b !== 'number') {
-              throw new McpError(ErrorCode.InvalidParams, "Both 'a' and 'b' parameters must be numbers");
-            }
-            const multiply = args.a * args.b;
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `${args.a} * ${args.b} = ${multiply}`,
-                },
-              ],
-            };
-
           case "get_time":
             const now = new Date().toISOString();
             return {
@@ -181,6 +392,15 @@ class ExampleMCPServer {
 
           case "file_operations":
             return await this.handleFileOperations(args);
+
+          case "http_request":
+            return await this.handleHttpRequest(args);
+
+          case "weather_api":
+            return await this.handleWeatherAPI(args);
+
+          case "json_placeholder":
+            return await this.handleJsonPlaceholder(args);
 
           default:
             throw new McpError(
